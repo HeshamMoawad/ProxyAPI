@@ -1,90 +1,70 @@
 import threading as thr
-import requests as req
 import numpy as np
-
-# url = "https://proxylist.geonode.com/api/proxy-list?limit=1000&page=1&sort_by=lastChecked&sort_type=desc"
-
-# res = req.get("https://proxylist.geonode.com/api/proxy-list?limit=500")
-# ids = res.json()['data']
-# print(type(ids))
+import requests 
+from bs4 import BeautifulSoup 
 
 
-# proxy = {
-#     'http': 'http://41.33.47.147:1981', 
-#     'https': 'https://41.33.47.147:1981'
-#     }
-# {'http':f'http://','https':f'https://'}
+class ProxyFilterAPI(object): # From  https://free-proxy-list.net/ 
+    Yes = 'yes'
+    No = 'no'
 
-class ProxyFilterAPI(object):
-    def __init__(self,threadCount:int,testingURL,header,jsondata) -> None:
-        self.APIurl = "https://proxylist.geonode.com/api/proxy-list?limit=500"
-        self.Proxies = []  # good proxies 
-        self.ThreadCount = threadCount
-        self.Threads = []
-        self.Errors = []
-        self.ProxiesList = [] # All Proxies
-        self.Header = header
-        self.Jsondata = jsondata
-        self.TestingURL = testingURL
+    def __init__(self) -> None:
+        self.Threads = []  # List Of Threads that is Working
+        self.Errors = []  # Errors in https request 
+        self.ProxiesList = [] # Good Proxies
 
-    def getProxiesListFromWeb(self):
-        res = req.get(
-            url=self.APIurl,
-            timeout=10 ,
-            )
-        ids = res.json()['data']
-        for id in ids :
-            ip_port = f"{id['ip']}:{id['port']}"
-            proxy = {'http':f'http://{ip_port}','https':f'https://{ip_port}'}
-            self.ProxiesList.append(proxy)
+    def getFreshProxyList(
+        self,
+        httpsFilter:str ,
+        ExportToTXT:bool= False ,
+        ):
+        ProxyList = []
+        response = requests.get(url = 'https://free-proxy-list.net/')
+        self.soup = BeautifulSoup(response.text,'html.parser')
+        table = self.soup.find("tbody")
+        rows = table.find_all("tr")
+        for row in rows :
+            row = row.find_all('td')
+            ip = row[0].text
+            port = row[1].text
+            https = row[6].text
+            #print(f"{ip}:{port} --> https:{https}")
+            if https == httpsFilter :
+                ip_port = f"{ip}:{port}"
+                ProxyList.append(ip_port)
+        if ExportToTXT == True :
+            with open("Proxies.txt",'w+')as file :
+                file.writelines([ip_port+"\n" for ip_port in ProxyList])
+                file.close()
+        return ProxyList
+
+
+    def testProxy(self,ip_port):
+        proxy = {'http':ip_port,'https':ip_port}
+        try:
+            response = requests.get(url = "http://httpbin.org/ip",proxies= proxy ,timeout = 5)
+            self.ProxiesList.append(ip_port)
+        except Exception as e :
+            self.Errors.append(e)
+
+
+    def threadingRequstFilter(self,ip_portLists):
+        for iplist in ip_portLists:
+            task = thr.Thread(target = self.testProxy,args = (iplist,))
+            self.Threads.append(task)
+            task.start()
+
+    def wait(self)-> None:
+        for task in self.Threads:
+            if task.is_alive() :
+                task.join()
+
+    def autoAPI(self,wait:bool= True):
+        firstlist = self.getFreshProxyList(httpsFilter=self.Yes)
+        self.threadingRequstFilter(firstlist)
+        if wait == True :
+            self.wait()
+        return self.ProxiesList
         
 
-    def prepareProxies(self):
-        self.RequestThread = thr.Thread(target=self.getProxiesListFromWeb)
-        self.RequestThread.start()
-
-
-    def testFunction(self,proxylist):
-        for proxy in proxylist :
-            s = req.Session()
-            s.proxies = proxy
-            s.headers = self.Header
-            try:
-                res = req.post(
-                    url = self.TestingURL,
-                    json = self.Jsondata ,
-                )
-                self.Proxies.append(proxy)
-                #print(f'Good Proxy Found -> {proxy}')
-            except Exception as e:
-                self.Errors.append(e)
-
-
-    def MultiThreadingRequest(self):
-        self.RequestThread.join()
-        Proxieslists = np.array_split(self.ProxiesList,self.ThreadCount)
-        for proxyList in Proxieslists:
-            task1 = thr.Thread(
-                target = self.testFunction ,
-                args=(proxyList,)
-            )
-            task1.start()
-
-    def wait(self):
-        for task in self.Threads :
-            task.join()
-            
-        print("All Tasks End")
-        print(f"ProxyFilter Result is -> {self.Proxies}\nYou Can Access With calling ProxyFilterAPI.Proxies")
-
-
-
-
-    
-
-
-
-
-
-
-
+        
